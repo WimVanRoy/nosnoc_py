@@ -1,17 +1,21 @@
+"""Create MINLP for the hysteresis car problem."""
+
 import casadi as ca
 import numpy as np
-from nosnoc.rk_utils import generate_butcher_tableu_integral, IrkSchemes
 
 
 class OptiDiscrete(ca.Opti):
+    """Opti discrete."""
 
     def __init__(self, *args, **kwargs):
+        """Create an extended opti class handling discrete variables."""
         super(OptiDiscrete, self).__init__()
         self.discrete = []
         self.lbx = []
         self.ubx = []
         self.indices = {}
         self.M = 1e6
+        self.eps = 1e-9
 
     def variable(self, name, *args, lb=-ca.inf, ub=ca.inf, discrete=False):
         """Create variables."""
@@ -35,10 +39,17 @@ class OptiDiscrete(ca.Opti):
         self.ubx = ca.vertcat(self.ubx, ub)
         return var
 
-    def equal_if_on(self, trigger, equality, ns=1):
+    def equal_if_on(self, trigger, equality, ns=1, deviation=0):
         """Big M formulation."""
-        self.subject_to(equality >= -M*(1-trigger) * np.ones((ns, 1)))
+        self.subject_to(
+            equality >= (-M*(1-trigger)+deviation) * np.ones((ns, 1))
+        )
         self.subject_to(equality <= M*(1-trigger) * np.ones((ns, 1)))
+
+    def higher_if_on(self, trigger, equation):
+        """Trigger = 1 if equation > -eps."""
+        self.subject_to(-(1-trigger) * M <= equation + self.eps)
+        self.subject_to(equation + self.eps <= M * trigger)
 
 
 # Parameters
@@ -48,12 +59,11 @@ N_finite_elements = 2
 time_as_parameter = False
 n_s = 2
 tau = ca.collocation_points(n_s, "radau")
-
-irk_scheme = IrkSchemes.RADAU_IIA
 C_irk, D_irk, B_irk = ca.collocation_coeff(tau)
 
 # Hystheresis parameters
-v_levels = [5, 10, 15]
+psi_on = [10, 15]
+psi_off = [5, 10]
 
 # Model parameters
 q_goal = 150
@@ -73,6 +83,8 @@ v = ca.SX.sym("v")  # velocity
 L = ca.SX.sym("L")  # Fuel usage
 X = ca.vertcat(q, v, L)
 X0 = np.array([0, 0, 0]).T
+q_goal = 100
+v_goal = 0
 n_x = 3
 # Binaries to represent the problem:
 n_y = len(n)
@@ -119,18 +131,41 @@ opti.set_initial(Xk, X0)
 
 for k in range(N_stages):
     Yk = opti.variable("Yk", n_y, lb=0, ub=1, discrete=True)
-    Lk = opti.variable("Lkm", n_y, lb=0, ub=1, discrete=True)
     opti.set_initial(Yk, Y0)
     if k == 0:
         opti.subject_to(Yk == Y0)
     else:
         opti.subject_to(ca.sum1(Yk) == 1)  # SOS1 constraint
+        # Transition condition
+        LknUp = opti.variable("LknUp", n_y-1, lb=0, ub=1, discrete=True)
+        LknDown = opti.variable("LknDown", n_y-1, lb=0, ub=1, discrete=True)
+        # Transition
+        LkUp = opti.variable("LkUp", n_y, lb=0, ub=1, discrete=True)
+        LkDown = opti.variable("LkDown", n_y, lb=0, ub=1, discrete=True)
+
+        psi = psi_fun(Xk)
+        for i in range(n_y-1):
+            # Only if trigger is ok, go up
+            opti.subject_to(LkUp[i] <= LknUp[i])
+            # Only go up if active
+            opti.subject_to(LkUp[i] <= Yk[i])
+            # Force going up if trigger = 1 and in right state!
+            opti.subject_to(LkUp[i] >= LknUp[i] + Yk[i] - 1)
+            # If psi > psi_on -> psi - psi_on >= 0 -> LknUp = 1
+            opti.higher_if_on(LknUp[i], psi - psi_on[i])
+
+        for i in range(1, n_y):
+            opti.subject_to(LkDown[i-1] <= LknDown[i-1])
+            opti.subject_to(LkDown[i-1] <= Yk[i])
+            opti.subject_to(LkDown[i-1] >= LknDown[i-1] + Yk[i] - 1)
+            opti.higher_if_on(LknDown[i-1], psi_off[i-1] - psi)
 
     for i in range(N_control_intervals):
         Uk = opti.variable("U", n_u, lb=lbu, ub=ubu)
         opti.set_initial(Uk, U0)
 
         for j in range(N_finite_elements):
+            # n_s collocation points
             Xc = ca.horzcat(*[
                 opti.variable("Xc", n_x, lb=lbx, ub=ubx)
                 for i in range(n_s)
@@ -146,7 +181,8 @@ for k in range(N_stages):
             Z = ca.horzcat(Xk, Xc)
             Pidot = Z @ C_irk
             Xk_end = Z @ D_irk
-            # J = J + quad*B_irk*h;
+
+            # J = J + L*B_irk*h;
             for ode_id, ode in enumerate(odes):
                 opti.equal_if_on(Yk[ode_id], Pidot[:] - h * ode[:], n_x*n_s)
 
@@ -154,3 +190,8 @@ for k in range(N_stages):
             opti.subject_to(Xk == Xk_end)
 
 
+# Terminal constraints:
+opti.subject_to(Xk[0] == q_goal)
+opti.subject_to(Xk[1] == v_goal)
+J += Xk[2]
+opti.minimize(J)
