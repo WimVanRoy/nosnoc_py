@@ -204,15 +204,5 @@ opti.subject_to(Xk[0] == q_goal)
 opti.subject_to(Xk[1] == v_goal)
 J += Xk[2]
 opti.minimize(J)
-
-nlp = {'x': opti.x, 'f': opti.f, 'g': opti.g}
-solver = ca.nlpsol("solver", "ipopt", nlp, {
-    # "discrete": opti.discrete
-})
-solution = solver(
-    x0=opti.x0,
-    lbx=opti.lbx, ubx=opti.ubx,
-    lbg=opti.lbg, ubg=opti.ubg
-)
-stats = solver.stats()
-print(stats)
+opti.solver('ipopt')  # {'discrete': np.array(opti.discrete)})
+opti.solve()
