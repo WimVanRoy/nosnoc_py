@@ -34,6 +34,11 @@ class OptiDiscrete(ca.Opti):
         if not isinstance(ub, ca.DM):
             ub = ca.DM(ub)
 
+        if lb.shape != var.shape:
+            raise Exception(f"{lb.shape=} not equal to {var.shape=} for {var=}")
+        elif ub.shape != var.shape:
+            raise Exception(f"{ub.shape=} not equal to {var.shape=} for {var=}")
+
         # TODO: check size?
         self.lbx = ca.vertcat(self.lbx, lb)
         self.ubx = ca.vertcat(self.ubx, ub)
@@ -83,6 +88,8 @@ v = ca.SX.sym("v")  # velocity
 L = ca.SX.sym("L")  # Fuel usage
 X = ca.vertcat(q, v, L)
 X0 = np.array([0, 0, 0]).T
+lbx = np.array([0, 0, -ca.inf]).T
+ubx = np.array([ca.inf, v_max, ca.inf]).T
 q_goal = 100
 v_goal = 0
 n_x = 3
@@ -95,8 +102,6 @@ U0 = np.zeros(n_u)
 
 lbu = np.array([-u_max])
 ubu = np.array([u_max])
-lbx = np.array([-ca.inf, 0, -ca.inf, -1, 0]).T
-ubx = np.array([ca.inf, v_max, ca.inf, 2, ca.inf]).T
 
 # x = q v L
 X = ca.vertcat(q, v, L)
@@ -114,7 +119,7 @@ psi_fun = ca.Function('psi', [X], [psi])
 # Create problem:
 opti = OptiDiscrete()
 # Time optimal control
-if time_as_parameter:
+if not time_as_parameter:
     T_final = opti.variable("T_final", 1, lb=1e-2, ub=1e2)
 else:
     T_final = opti.parameter()
@@ -124,25 +129,29 @@ h = T_final/(N_stages*N_control_intervals*N_finite_elements)
 J = T_final
 
 
-Xk = opti.variable("Xk", n_x)
-opti.subject_to(Xk == X0)
+Xk = opti.variable("Xk", n_x, lb=X0, ub=X0)
 opti.set_initial(Xk, X0)
 
 
 for k in range(N_stages):
-    Yk = opti.variable("Yk", n_y, lb=0, ub=1, discrete=True)
+    Yk = opti.variable("Yk", n_y, lb=[0]*n_y, ub=[1]*n_y, discrete=True)
     opti.set_initial(Yk, Y0)
     if k == 0:
         opti.subject_to(Yk == Y0)
     else:
         opti.subject_to(ca.sum1(Yk) == 1)  # SOS1 constraint
         # Transition condition
-        LknUp = opti.variable("LknUp", n_y-1, lb=0, ub=1, discrete=True)
-        LknDown = opti.variable("LknDown", n_y-1, lb=0, ub=1, discrete=True)
+        LknUp = opti.variable(
+            "LknUp", n_y-1, lb=[0]*(n_y-1), ub=[1]*(n_y-1), discrete=True
+        )
+        LknDown = opti.variable(
+            "LknDown", n_y-1, lb=[0]*(n_y-1), ub=[1]*(n_y-1), discrete=True
+        )
         # Transition
-        LkUp = opti.variable("LkUp", n_y, lb=0, ub=1, discrete=True)
-        LkDown = opti.variable("LkDown", n_y, lb=0, ub=1, discrete=True)
-
+        LkUp = opti.variable(
+            "LkUp", n_y, lb=[0]*n_y, ub=[1]*n_y, discrete=True)
+        LkDown = opti.variable(
+            "LkDown", n_y, lb=[0]*n_y, ub=[1]*n_y, discrete=True)
         psi = psi_fun(Xk)
         for i in range(n_y-1):
             # Only if trigger is ok, go up
@@ -195,3 +204,15 @@ opti.subject_to(Xk[0] == q_goal)
 opti.subject_to(Xk[1] == v_goal)
 J += Xk[2]
 opti.minimize(J)
+
+nlp = {'x': opti.x, 'f': opti.f, 'g': opti.g}
+solver = ca.nlpsol("solver", "ipopt", nlp, {
+    # "discrete": opti.discrete
+})
+solution = solver(
+    x0=opti.x0,
+    lbx=opti.lbx, ubx=opti.ubx,
+    lbg=opti.lbg, ubg=opti.ubg
+)
+stats = solver.stats()
+print(stats)
