@@ -46,6 +46,8 @@ class ZMode(Enum):
     TYPE_1_0 = 1
     TYPE_1_5 = 2
     TYPE_2_0 = 3
+    TYPE_PAPER_1 = 4
+    TYPE_PAPER_2 = 5
 
 
 def create_options():
@@ -84,6 +86,22 @@ def create_options():
 def push_equation(a_push, psi, zero_point):
     """Eval push equation."""
     return a_push * (psi - zero_point) ** 2 / (1 + (psi - zero_point)**2)
+
+
+def convert_to_3d(Z_2d, i):
+    """Convert to 3d."""
+    if i % 2 == 0:
+        return [
+            np.array([z[0], z[1] - i / 2, i /2])
+            for z in Z_2d
+        ]
+    elif i % 2 == 1:
+        return [
+            np.array([z[0], (i + 1) / 2, z[1] - (i + 1)/ 2])
+            for z in Z_2d
+        ]
+    else:
+        raise RuntimeError("Unexpected!")
 
 
 def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
@@ -136,7 +154,7 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             np.array([1-b, 1-a, 0]),
             np.array([1-b, 1+a, 0])
         ]
-    else:
+    elif mode == ZMode.TYPE_1_5 or mode == ZMode.TYPE_2_0:
         shift = 0.5
         Z = [
             np.array([b,  -a, 0]),
@@ -149,6 +167,27 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             np.array([1-b + shift, 1, 1-a]),
             np.array([1-b + shift, 1, 1+a])
         ]
+    else mode == ZMode.TYPE_PAPER_1:
+        # Using custom gears:
+        L_levels = [i/5 for i in [10, 20, 30, 40]]
+        U_levels = [i/5 for i in [15, 25, 35, 45]]
+        psi = v / 5
+        Z = []
+        for i, (ll, lu) in enumerate(zip(L_levels, U_levels)):
+            l_diff = lu - ll
+            a = l_diff / 2
+            b = 1 / (4 * l_diff)
+            Z_2d = [
+                np.array([a - b + ll, i-1/4]),
+                np.array([a - b + ll, i+1/4]),
+                np.array([a + b + ll, i+3/4]),
+                np.array([a + b + ll, i+5/4])
+            ]
+            Z.extend(convert_to_3d(Z_2d, i))
+    else mode == ZMode.TYPE_PAPER_2:
+        # TODO
+        raise NotImplementedError()
+
 
     g_ind = [ca.vertcat(*[
         ca.norm_2(z - zi)**2 for zi in Z
@@ -196,7 +235,7 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             s * (f_push_up_w1),
             s * (2 * f_B - f_push_up_w1)
         ]
-    else:
+    elif mode == ZMode.TYPE_1_5 or mode == ZMode.TYPE_2_0:
         push_down_eq = push_equation(-a_push, psi, 1 + shift)
         push_up_eq = push_equation(a_push, psi, 0 + shift)
         f_push_down_w2 = ca.vertcat(0, 0, 0, 0, push_down_eq, 0)
@@ -211,6 +250,9 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             s * (f_push_up_w2),
             s * (2 * f_C - f_push_up_w2),
         ]
+    elif mode == ZMode.TYPE_PAPER_1:
+        # TODO
+        pass
 
     F = [ca.horzcat(*f_1)]
 

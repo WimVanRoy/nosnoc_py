@@ -39,7 +39,7 @@ class Stages(Enum):
 
     STAGE_1 = 1
     STAGE_2 = 2
-    STAGE_N = 3
+    TYPE_PAPER_1 = 3
 
 
 def create_options():
@@ -85,8 +85,8 @@ def gamma_eq(a_push, x):
     return a_push * x**2 / (1 + x**2 )
 
 
-def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_N,
-                           psi_shift_2=0.6):
+def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
+                           psi_shift_2=2.0):
     """Create a gearbox."""
     # State variables:
     q = ca.SX.sym("q")  # position
@@ -140,11 +140,11 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_N,
             np.array([psi_shift_2 + 3/4, 1 + 5/4]),  # Similar to mode 4
         ]
         psi = (v-v1)/(v2-v1)
-    elif mode == Stages.STAGE_N:
+    elif mode == Stages.TYPE_PAPER_1:
         # Using custom gears:
-        L_levels = [i/5 for i in [10, 20, 30, 40]]
-        U_levels = [i/5 for i in [15, 25, 35, 45]]
-        psi = v / 5
+        L_levels = [i/5 - 1 for i in [10, 20]]  # , 30, 40]]
+        U_levels = [i/5 - 1 for i in [15, 25]]  # , 35, 45]]
+        psi = v / 5 - 1
         Z = []
         for i, (ll, lu) in enumerate(zip(L_levels, U_levels)):
             l_diff = lu - ll
@@ -209,7 +209,7 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_N,
             s * (f_push_up_1),
             s * (2 * f_C - f_push_up_1),
         ]
-    elif mode == Stages.STAGE_N:
+    elif mode == Stages.TYPE_PAPER_1:
         f_1 = []
         for i, (ll, lu) in enumerate(zip(L_levels, U_levels)):
             f_A = ca.vertcat(
