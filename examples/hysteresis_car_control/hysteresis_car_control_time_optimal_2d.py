@@ -26,10 +26,12 @@ v_goal = 0
 v_max = 30
 u_max = 5
 
-# fuel costs:
-C = [1, 1.8, 2.5]
 # ratios
-n = [1, 2, 3]
+n = [1, 2, 3, 4, 5]
+# fuel costs:
+# C = [1, 1.8, 2.5]
+C = [i * (1.05 - 0.05 * i) for i in n]
+# C = [1, 1.9, 2.7, 3.4, 4.0]
 
 
 class Stages(Enum):
@@ -37,6 +39,7 @@ class Stages(Enum):
 
     STAGE_1 = 1
     STAGE_2 = 2
+    STAGE_N = 3
 
 
 def create_options():
@@ -74,10 +77,15 @@ def create_options():
 
 def push_equation(a_push, psi, zero_point):
     """Eval push equation."""
-    return a_push * (psi - zero_point) ** 2 / (1 + (psi - zero_point)**2)
+    return gamma_eq(a_push, psi- zero_point)
 
 
-def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
+def gamma_eq(a_push, x):
+    """Gamma equation."""
+    return a_push * x**2 / (1 + x**2 )
+
+
+def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_N,
                            psi_shift_2=0.6):
     """Create a gearbox."""
     # State variables:
@@ -105,8 +113,6 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
         U = [u, s]
 
     # Tracking gearbox:
-    psi = (v-v1)/(v2-v1)
-    z = ca.vertcat(psi, w)
     if mode == Stages.STAGE_1:
         Z = [
             np.array([1 / 4, -1 / 4]),
@@ -114,6 +120,7 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
             np.array([3 / 4, 3 / 4]),
             np.array([3 / 4, 5 / 4])
         ]
+        psi = (v-v1)/(v2-v1)
     elif mode == Stages.STAGE_2:
         if psi_shift_2 <= 1.0:
             print("Due to overlapping hysteresis curves, "
@@ -132,7 +139,25 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
             np.array([psi_shift_2 + 3/4, 1 + 3/4]),  # Similar to mode 3
             np.array([psi_shift_2 + 3/4, 1 + 5/4]),  # Similar to mode 4
         ]
+        psi = (v-v1)/(v2-v1)
+    elif mode == Stages.STAGE_N:
+        # Using custom gears:
+        L_levels = [i/5 for i in [10, 20, 30, 40]]
+        U_levels = [i/5 for i in [15, 25, 35, 45]]
+        psi = v / 5
+        Z = []
+        for i, (ll, lu) in enumerate(zip(L_levels, U_levels)):
+            l_diff = lu - ll
+            a = l_diff / 2
+            b = 1 / (4 * l_diff)
+            Z.extend([
+                np.array([a - b + ll, i-1/4]),
+                np.array([a - b + ll, i+1/4]),
+                np.array([a + b + ll, i+3/4]),
+                np.array([a + b + ll, i+5/4])
+            ])
 
+    z = ca.vertcat(psi, w)
     g_ind = [ca.vertcat(*[
         ca.norm_2(z - zi)**2 for zi in Z
     ])]
@@ -184,6 +209,25 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
             s * (f_push_up_1),
             s * (2 * f_C - f_push_up_1),
         ]
+    elif mode == Stages.STAGE_N:
+        f_1 = []
+        for i, (ll, lu) in enumerate(zip(L_levels, U_levels)):
+            f_A = ca.vertcat(
+                v, n[i]*u, C[i], 0, 1
+            )
+            f_B = ca.vertcat(
+                v, n[i+1]*u, C[i+1], 0, 1
+            )
+            push_down_eq = -gamma_eq(a_push, (psi - lu)/(lu - ll))
+            push_up_eq = gamma_eq(a_push, (psi - ll)/(lu - ll))
+            f_push_up_1 = ca.vertcat(0, 0, 0, push_up_eq, 0)
+            f_push_down_1 = ca.vertcat(0, 0, 0, push_down_eq, 0)
+            f_1.extend([
+                s * (2 * f_A - f_push_down),
+                s * (f_push_down),
+                s * (f_push_up),
+                s * (2 * f_B - f_push_up),
+            ])
 
     F = [ca.horzcat(*f_1)]
 
@@ -287,4 +331,4 @@ def control():
 
 
 if __name__ == "__main__":
-    simulation()
+    control()
