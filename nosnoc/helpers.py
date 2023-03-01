@@ -47,7 +47,7 @@ class NosnocSimLooper:
 
         self.cpu_nlp = np.zeros((Nsim, solver.opts.max_iter_homotopy + 1))
 
-    def run(self) -> None:
+    def run(self, stop_on_failure=False) -> None:
         """Run the simulation loop."""
         for i in range(self.Nsim):
             # set values
@@ -69,6 +69,11 @@ class NosnocSimLooper:
             self.w_sim += [results["w_sol"]]
             self.w_all += [results["w_all"]]
             self.cost_vals.append(results["cost_val"])
+
+            if (stop_on_failure and results["status"] == "Infeasible_Problem_Detected"):
+                return False
+
+        return True
 
     def get_results(self) -> dict:
         self.t_grid = np.concatenate((np.array([0.0]), np.cumsum(self.time_steps)))
