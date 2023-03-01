@@ -8,7 +8,6 @@ are thus given in a 3D space. The hysteresis curves can overlap in this
 """
 
 import nosnoc
-from nosnoc.plot_utils import plot_colored_line_3d, scatter_3d
 import casadi as ca
 import numpy as np
 from math import ceil, log
@@ -16,8 +15,8 @@ import matplotlib.pyplot as plt
 from enum import Enum
 
 # Hystheresis parameters
-v1 = 5
-v2 = 10
+v1 = 10
+v2 = 14
 
 # Model parameters
 q_goal = 150
@@ -25,11 +24,14 @@ v_goal = 0
 v_max = 30
 u_max = 5
 
-# ratios
-n = [1, 2, 3, 4, 5]
+# fuel costs of turbo and nominal
+# TODO
+Pn = 1
+Pt = 2.5
 # fuel costs:
-# C = [1, 1.8, 2.5]
-C = [i * (1.05 - 0.05 * i) for i in n]
+C = [1, 1.8, 2.5]
+# ratios
+n = [1, 2, 3]
 
 
 def calc_dist(a, b):
@@ -41,9 +43,8 @@ class ZMode(Enum):
     """Z Mode."""
 
     TYPE_1_0 = 1
-    TYPE_2_0 = 2
-    TYPE_PAPER_1 = 3
-    TYPE_PAPER_2 = 4
+    TYPE_1_5 = 2
+    TYPE_2_0 = 3
 
 
 def create_options():
@@ -69,44 +70,23 @@ def create_options():
         log(opts.sigma_N / opts.sigma_0) / log(opts.homotopy_update_slope))) + 1
     opts.comp_tol = 1e-14
 
+    # IPOPT Settings
+    opts.nlp_max_iter = 500
+
     # New setting: time freezing settings
     opts.initial_theta = 0.5
     opts.time_freezing = False
     opts.pss_mode = nosnoc.PssMode.STEWART
-    opts.nlp_max_iter = 300
     return opts
 
 
 def push_equation(a_push, psi, zero_point):
     """Eval push equation."""
-    return gamma_eq(a_push, psi - zero_point)
-
-
-def gamma_eq(a_push, x):
-    """Gamma equation."""
-    a_push = 2
-    return a_push * x ** 2 / (1 + x**2) + 1e-3
-
-
-def convert_to_3d(Z_2d, i):
-    """Convert to 3d."""
-    if i % 2 == 0:
-        return [
-            np.array([z[0], z[1] - i / 2, i / 2])
-            for z in Z_2d
-        ]
-    elif i % 2 == 1:
-        return [
-            np.array([z[0], (i + 1) / 2, z[1] - (i + 1) / 2])
-            for z in Z_2d
-        ]
-    else:
-        raise RuntimeError("Unexpected!")
+    return a_push * (psi - zero_point) ** 2 / (1 + (psi - zero_point)**2)
 
 
 def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
-                           use_traject=False, use_traject_constraint=False,
-                           mode=ZMode.TYPE_1_0):
+                           use_traject=False, use_traject_constraint=True):
     """Create a gearbox."""
     if not use_traject and q_goal is None:
         raise Exception("You should provide a traject or a q_goal")
@@ -120,7 +100,7 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
     t = ca.SX.sym('t')  # Time variable
     X = ca.vertcat(q, v, L, w1, w2, t)
     X0 = np.array([0, 0, 0, 0, 0, 0]).T
-    lbx = np.array([-ca.inf, 0, -ca.inf, 0, 0, 0]).T
+    lbx = np.array([-ca.inf, 0, -ca.inf, -1, -1, 0]).T
     ubx = np.array([ca.inf, v_max, ca.inf, ca.inf, ca.inf, ca.inf]).T
 
     if use_traject:
@@ -132,16 +112,20 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
     if not use_simulation:
         u = ca.SX.sym('u')  # drive
         s = ca.SX.sym('s')  # Length of time
-        U = ca.vertcat(u, s)
-        lbu = np.array([-u_max, 0.5])
-        ubu = np.array([u_max, 20])
+        U = ca.vertcat(u)
+        lbu = np.array([-u_max])
+        ubu = np.array([u_max])
     else:
         u = ca.SX.sym('u')  # drive
         s = 1
         lbu = u
         ubu = u
-        U = [u, s]
+        U = [u]
 
+    # Tracking gearbox:
+    psi = (v-v1)/(v2-v1)
+    z = ca.vertcat(psi, w1, w2)
+    mode = ZMode.TYPE_2_0
     a = 1/4
     b = 1/4
     if mode == ZMode.TYPE_1_0:
@@ -151,8 +135,7 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             np.array([1-b, 1-a, 0]),
             np.array([1-b, 1+a, 0])
         ]
-        psi = (v-v1)/(v2-v1)
-    elif mode == ZMode.TYPE_2_0:
+    else:
         shift = 0.5
         Z = [
             np.array([b,  -a, 0]),
@@ -165,31 +148,7 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             np.array([1-b + shift, 1, 1-a]),
             np.array([1-b + shift, 1, 1+a])
         ]
-        psi = (v-v1)/(v2-v1)
-    elif mode == ZMode.TYPE_PAPER_1:
-        # Using custom gears:
-        L_levels = [i/5 for i in [10, 20]]  # , 30, 40]]
-        U_levels = [i/5 for i in [15, 25]]  # , 35, 45]]
-        psi = v / 5
-        Z = []
-        for i, (ll, lu) in enumerate(zip(L_levels, U_levels)):
-            l_diff = lu - ll
-            a = l_diff / 2
-            b = 1 / (4 * l_diff)
-            Z_2d = [
-                np.array([a - b + ll, i-1/4]),
-                np.array([a - b + ll, i+1/4]),
-                np.array([a + b + ll, i+3/4]),
-                np.array([a + b + ll, i+5/4])
-            ]
-            Z.extend(convert_to_3d(Z_2d, i))
-    elif mode == ZMode.TYPE_PAPER_2:
-        # TODO
-        raise NotImplementedError()
-    else:
-        raise NotImplementedError()
 
-    z = ca.vertcat(psi, w1, w2)
     g_ind = [ca.vertcat(*[
         ca.norm_2(z - zi)**2 for zi in Z
     ])]
@@ -236,7 +195,7 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             s * (f_push_up_w1),
             s * (2 * f_B - f_push_up_w1)
         ]
-    elif mode == ZMode.TYPE_2_0:
+    else:
         push_down_eq = push_equation(-a_push, psi, 1 + shift)
         push_up_eq = push_equation(a_push, psi, 0 + shift)
         f_push_down_w2 = ca.vertcat(0, 0, 0, 0, push_down_eq, 0)
@@ -251,30 +210,6 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             s * (f_push_up_w2),
             s * (2 * f_C - f_push_up_w2),
         ]
-    elif mode == ZMode.TYPE_PAPER_1:
-        f_1 = []
-        for i, (ll, lu) in enumerate(zip(L_levels, U_levels)):
-            f_A = ca.vertcat(
-                v, n[i]*u, C[i], 0, 0, 1
-            )
-            f_B = ca.vertcat(
-                v, n[i+1]*u, C[i+1], 0, 0, 1
-            )
-            push_down_eq = -gamma_eq(a_push, 2 * (psi - lu)/(lu - ll))
-            push_up_eq = gamma_eq(a_push, 2 * (psi - ll)/(lu - ll))
-            if i % 2 == 0:
-                f_push_up = ca.vertcat(0, 0, 0, push_up_eq, 0, 0)
-                f_push_down = ca.vertcat(0, 0, 0, push_down_eq, 0, 0)
-            else:
-                f_push_up = ca.vertcat(0, 0, 0, 0, push_up_eq, 0)
-                f_push_down = ca.vertcat(0, 0, 0, 0, push_down_eq, 0)
-
-            f_1.extend([
-                s * (2 * f_A - f_push_down),
-                s * (f_push_down),
-                s * (f_push_up),
-                s * (2 * f_B - f_push_up),
-            ])
 
     F = [ca.horzcat(*f_1)]
 
@@ -282,7 +217,7 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
         model = nosnoc.NosnocModel(
             x=X, F=F, g_Stewart=g_ind, x0=X0, u=U, t_var=t,
             p_time_var=p_traj,
-            p_time_var_val=traject,
+            p_time_var_val=traject, v_global=s,
             name="gearbox"
         )
     else:
@@ -291,16 +226,14 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             p_global=u, p_global_val=np.array([0]),
             name="gearbox"
         )
-    return model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal, Z
+    return model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal
 
 
 def plot(x_list, t_grid, u_list, t_grid_u):
     """Plot."""
     q = [x[0] for x in x_list]
     v = [x[1] for x in x_list]
-    # aux = [x[-2] + x[-3] for x in x_list]
-    w1 = [x[-3] for x in x_list]
-    w2 = [x[-2] for x in x_list]
+    aux = [x[-2] + x[-3] for x in x_list]
     t = [x[-1] for x in x_list]
 
     plt.figure()
@@ -321,16 +254,23 @@ def plot(x_list, t_grid, u_list, t_grid_u):
     plt.plot(t, q, label="Position vs actual time")
     plt.xlabel("Actual Time [$s$]")
 
-    plot_colored_line_3d(
-        v, w1, w2, t
-    )
+    plt.figure()
+    plt.plot([-2, 1], [0, 0], 'k')
+    plt.plot([0, 2], [1, 1], 'k')
+    plt.plot([-1, 0, 1, 2], [1.5, 1, 0, -.5], 'k')
+    psi = [(vi - v1) / (v2 - v1) for vi in v]
+    im = plt.scatter(psi, aux, c=t_grid, cmap=plt.hot())
+    im.set_label('Time')
+    plt.colorbar(im)
+    plt.xlabel("$\\psi(x)$")
+    plt.ylabel("$w$")
     plt.show()
 
 
 def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
     """Simulate the temperature control system with a fixed input."""
     opts = create_options()
-    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal, Z = create_gearbox_voronoi(
+    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal = create_gearbox_voronoi(
         use_simulation=True, q_goal=q_goal
     )
     Tstep = Tsim / Nsim
@@ -338,17 +278,16 @@ def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
     opts.N_stages = 1
     opts.terminal_time = Tstep
     opts.sigma_N = 1e-2
-    scatter_3d(Z)
 
     solver = nosnoc.NosnocSolver(opts, model)
 
     # loop
     looper = nosnoc.NosnocSimLooper(solver, model.x0, Nsim, p_values=np.array([[
-        20, 20, 20, 20, 20, 20, 20, 20, 20, 20,
+20, 20, 20, 20, 20, 20, 20, 20, 20, 20,
         10, 10, 10, 10, 10, 10, -10, -10, -10, -10,
         -10, -10, -10, -10, -10, -10, -10, -10, -10, -10,
     ]]).T)
-    looper.run(stop_on_failure=True)
+    looper.run()
     results = looper.get_results()
     print(f"Ends in zone: {np.argmax(results['theta_sim'][-1][-1])}")
     print(results['theta_sim'][-1][-1])
@@ -357,23 +296,38 @@ def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
 
 def control():
     """Execute one Control step."""
+    N = 5
     # traject = np.array([[q_goal * (i + 1) / N for i in range(N)]]).T
-    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal, Z = create_gearbox_voronoi(
+    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal = create_gearbox_voronoi(
         q_goal=q_goal,
     )
     opts = create_options()
+    opts.N_finite_elements = 10
     opts.n_s = 3
-    opts.N_finite_elements = 5
-    opts.N_stages = 5
-    opts.terminal_time = 10
-    opts.sigma_N = 1e-2
+    opts.N_stages = N
+    opts.terminal_time = 5
+    opts.time_freezing = False
+    opts.time_freezing_tolerance = 0.1
+    opts.nlp_max_iter = 500
+    opts.initialization_strategy = nosnoc.InitializationStrategy.EXTERNAL
 
     ocp = nosnoc.NosnocOcp(
         lbu=lbu, ubu=ubu, f_q=f_q, f_terminal=f_terminal,
-        g_terminal=g_terminal,
+        g_terminal=g_terminal, lbv_global=np.array([0.1]),
+        ubv_global=np.array([20]),
         lbx=lbx, ubx=ubx
     )
     solver = nosnoc.NosnocSolver(opts, model, ocp)
+    solver.set('v_global', np.array([1]))
+    solver.set('x', np.vstack((
+        np.linspace(0, q_goal, N),
+        np.linspace(0, v_goal, N),
+        np.zeros((3, N)),
+        np.ones((1, N))
+    )).T)
+    solver.set('u', np.vstack((
+        np.zeros((1, N)),
+    )).T)
     results = solver.solve()
     plot(
         results["x_traj"], results["t_grid"],
