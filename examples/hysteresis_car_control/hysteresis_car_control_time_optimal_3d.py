@@ -25,14 +25,11 @@ v_goal = 0
 v_max = 30
 u_max = 5
 
-# fuel costs of turbo and nominal
-# TODO
-Pn = 1
-Pt = 2.5
-# fuel costs:
-C = [1, 1.8, 2.5]
 # ratios
-n = [1, 2, 3]
+n = [1, 2, 3, 4, 5]
+# fuel costs:
+# C = [1, 1.8, 2.5]
+C = [i * (1.05 - 0.05 * i) for i in n]
 
 
 def calc_dist(a, b):
@@ -85,19 +82,24 @@ def create_options():
 
 def push_equation(a_push, psi, zero_point):
     """Eval push equation."""
-    return a_push * (psi - zero_point) ** 2 / (1 + (psi - zero_point)**2)
+    return gamma_eq(a_push, psi - zero_point)
+
+
+def gamma_eq(a_push, x):
+    """Gamma equation."""
+    return a_push * x**2 / (1 + x**2)
 
 
 def convert_to_3d(Z_2d, i):
     """Convert to 3d."""
     if i % 2 == 0:
         return [
-            np.array([z[0], z[1] - i / 2, i /2])
+            np.array([z[0], z[1] - i / 2, i / 2])
             for z in Z_2d
         ]
     elif i % 2 == 1:
         return [
-            np.array([z[0], (i + 1) / 2, z[1] - (i + 1)/ 2])
+            np.array([z[0], (i + 1) / 2, z[1] - (i + 1) / 2])
             for z in Z_2d
         ]
     else:
@@ -105,7 +107,8 @@ def convert_to_3d(Z_2d, i):
 
 
 def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
-                           use_traject=False, use_traject_constraint=True):
+                           use_traject=False, use_traject_constraint=False,
+                           mode=ZMode.TYPE_PAPER_1):
     """Create a gearbox."""
     if not use_traject and q_goal is None:
         raise Exception("You should provide a traject or a q_goal")
@@ -141,10 +144,6 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
         ubu = u
         U = [u, s]
 
-    # Tracking gearbox:
-    psi = (v-v1)/(v2-v1)
-    z = ca.vertcat(psi, w1, w2)
-    mode = ZMode.TYPE_2_0
     a = 1/4
     b = 1/4
     if mode == ZMode.TYPE_1_0:
@@ -154,6 +153,7 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             np.array([1-b, 1-a, 0]),
             np.array([1-b, 1+a, 0])
         ]
+        psi = (v-v1)/(v2-v1)
     elif mode == ZMode.TYPE_1_5 or mode == ZMode.TYPE_2_0:
         shift = 0.5
         Z = [
@@ -167,10 +167,11 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             np.array([1-b + shift, 1, 1-a]),
             np.array([1-b + shift, 1, 1+a])
         ]
-    else mode == ZMode.TYPE_PAPER_1:
+        psi = (v-v1)/(v2-v1)
+    elif mode == ZMode.TYPE_PAPER_1:
         # Using custom gears:
-        L_levels = [i/5 for i in [10, 20, 30, 40]]
-        U_levels = [i/5 for i in [15, 25, 35, 45]]
+        L_levels = [i/5 for i in [10, 20]]  # , 30, 40]]
+        U_levels = [i/5 for i in [15, 25]]  # , 35, 45]]
         psi = v / 5
         Z = []
         for i, (ll, lu) in enumerate(zip(L_levels, U_levels)):
@@ -184,11 +185,13 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
                 np.array([a + b + ll, i+5/4])
             ]
             Z.extend(convert_to_3d(Z_2d, i))
-    else mode == ZMode.TYPE_PAPER_2:
+    elif mode == ZMode.TYPE_PAPER_2:
         # TODO
         raise NotImplementedError()
+    else:
+        raise NotImplementedError()
 
-
+    z = ca.vertcat(psi, w1, w2)
     g_ind = [ca.vertcat(*[
         ca.norm_2(z - zi)**2 for zi in Z
     ])]
@@ -251,8 +254,29 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             s * (2 * f_C - f_push_up_w2),
         ]
     elif mode == ZMode.TYPE_PAPER_1:
-        # TODO
-        pass
+        f_1 = []
+        for i, (ll, lu) in enumerate(zip(L_levels, U_levels)):
+            f_A = ca.vertcat(
+                v, n[i]*u, C[i], 0, 0, 1
+            )
+            f_B = ca.vertcat(
+                v, n[i+1]*u, C[i+1], 0, 0, 1
+            )
+            push_down_eq = -gamma_eq(a_push, 2 * (psi - lu)/(lu - ll))
+            push_up_eq = gamma_eq(a_push, 2 * (psi - ll)/(lu - ll))
+            if i % 2 == 0:
+                f_push_up = ca.vertcat(0, 0, 0, push_up_eq, 0, 0)
+                f_push_down = ca.vertcat(0, 0, 0, push_down_eq, 0, 0)
+            else:
+                f_push_up = ca.vertcat(0, 0, 0, 0, push_up_eq, 0)
+                f_push_down = ca.vertcat(0, 0, 0, 0, push_down_eq, 0)
+
+            f_1.extend([
+                s * (2 * f_A - f_push_down),
+                s * (f_push_down),
+                s * (f_push_up),
+                s * (2 * f_B - f_push_up),
+            ])
 
     F = [ca.horzcat(*f_1)]
 
@@ -330,7 +354,7 @@ def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
 
     # loop
     looper = nosnoc.NosnocSimLooper(solver, model.x0, Nsim, p_values=np.array([[
-20, 20, 20, 20, 20, 20, 20, 20, 20, 20,
+        20, 20, 20, 20, 20, 20, 20, 20, 20, 20,
         10, 10, 10, 10, 10, 10, -10, -10, -10, -10,
         -10, -10, -10, -10, -10, -10, -10, -10, -10, -10,
     ]]).T)
@@ -371,4 +395,4 @@ def control():
 
 
 if __name__ == "__main__":
-    control()
+    simulation()
