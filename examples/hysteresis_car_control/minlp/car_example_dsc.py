@@ -4,6 +4,7 @@ import casadi as ca
 import numpy as np
 from crc_algo.opt.description import Description
 import matplotlib.pyplot as plt
+from crc_algo.timetools import tic, toc
 
 
 class DescriptionExt(Description):
@@ -181,27 +182,34 @@ def run_bonmin():
     """Run bonmin."""
     opti = create_problem()
     opti.set_solver(ca.nlpsol, 'bonmin', is_discrete=True)
+    tic()
     opti.solve()
-    return opti
+    toc()
+    return opti, opti.get("T_final")
 
 
 def run_ipopt():
     """Run ipopt."""
     opti = create_problem()
     opti.set_solver(ca.nlpsol, 'ipopt', is_discrete=False)
+    tic()
     opti.solve()
-    return opti
+    toc()
+    return opti, opti.get("T_final")
 
 
 def run_gurobi():
     """Run gurobi."""
     opti = create_problem(time_as_parameter=True, use_big_M=True)
     opti.set_solver(ca.qpsol, "gurobi", is_discrete=True, options={"error_on_fail": False})
+    tic()
     T_max = 20
     T_min = 1e-2
     lb_k = [T_min]
     ub_k = [T_max]
     tolerance = 1e-2
+    solution = None
+    T_opt = None
     while ub_k[-1] - lb_k[-1] > tolerance:
         T_new = (ub_k[-1] + lb_k[-1]) / 2
         opti.set_parameters("T_final", T_new)
@@ -210,16 +218,20 @@ def run_gurobi():
             print(f"SUCCES {T_new=}")
             # Success
             ub_k.append(T_new)
+            T_opt = T_new
+            solution = opti.solution
         else:
             print(f"INF {T_new=}")
             lb_k.append(T_new)
 
-    return opti
+    toc()
+    opti.solution = solution
+    return opti, T_opt
 
 
 if __name__ == "__main__":
-    opti = run_bonmin()
-    print(opti.get("T_final"))
+    opti, T_final = run_gurobi()
+    print(T_final)
     Xk = np.array(opti.get("Xk"))
     plt.plot(Xk)
     plt.show()
