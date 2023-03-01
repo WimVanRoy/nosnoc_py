@@ -218,8 +218,8 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
             f_B = ca.vertcat(
                 v, n[i+1]*u, C[i+1], 0, 1
             )
-            push_down_eq = -gamma_eq(a_push, (psi - lu)/(lu - ll))
-            push_up_eq = gamma_eq(a_push, (psi - ll)/(lu - ll))
+            push_down_eq = -gamma_eq(a_push, 2 * (psi - lu)/(lu - ll))
+            push_up_eq = gamma_eq(a_push, 2 * (psi - ll)/(lu - ll))
             f_push_up_1 = ca.vertcat(0, 0, 0, push_up_eq, 0)
             f_push_down_1 = ca.vertcat(0, 0, 0, push_down_eq, 0)
             f_1.extend([
@@ -315,7 +315,8 @@ def control():
     opts.terminal_time = 30
     opts.time_freezing = False
     opts.time_freezing_tolerance = 0.1
-    opts.nlp_max_iter = 10000
+    opts.nlp_max_iter = 400
+    opts.sigma_N = 1e-3
 
     ocp = nosnoc.NosnocOcp(
         lbu=lbu, ubu=ubu, f_q=f_q, f_terminal=f_terminal,
