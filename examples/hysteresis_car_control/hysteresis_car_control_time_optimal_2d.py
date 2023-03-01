@@ -77,17 +77,17 @@ def create_options():
 
 def push_equation(a_push, psi, zero_point):
     """Eval push equation."""
-    return gamma_eq(a_push, psi- zero_point)
+    return gamma_eq(a_push, psi - zero_point)
 
 
 def gamma_eq(a_push, x):
     """Gamma equation."""
-    return a_push * x**2 / (1 + x**2 )
+    return a_push * x**2 / (1 + x**2)
 
 
 def create_gearbox_voronoi(u=None, q_goal=None, traject=None,
-                           use_traject=False, mode=Stages.STAGE_1,
-                           psi_shift_2=2.0):
+                           use_traject=False, mode=Stages.STAGE_2,
+                           psi_shift_2=3.0):
     """Create a gearbox."""
     # State variables:
     q = ca.SX.sym("q")  # position
@@ -97,7 +97,7 @@ def create_gearbox_voronoi(u=None, q_goal=None, traject=None,
     t = ca.SX.sym('t')  # Time variable
     X = ca.vertcat(q, v, L, w, t)
     X0 = np.array([0, 0, 0, 0, 0]).T
-    lbx = np.array([-ca.inf, 0, -ca.inf, -1, 0]).T
+    lbx = np.array([-ca.inf, 0, -ca.inf, 0, 0]).T
     ubx = np.array([ca.inf, v_max, ca.inf, 2, ca.inf]).T
 
     if use_traject:
