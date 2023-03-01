@@ -246,4 +246,4 @@ def control():
 
 
 if __name__ == "__main__":
-    simulation()
+    control()

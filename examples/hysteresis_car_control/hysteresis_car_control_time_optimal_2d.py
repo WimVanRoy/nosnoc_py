@@ -17,8 +17,8 @@ import matplotlib.pyplot as plt
 from enum import Enum
 
 # Hystheresis parameters
-v1 = 5
-v2 = 10
+v1 = 10
+v2 = 15
 
 # Model parameters
 q_goal = 150
@@ -29,8 +29,8 @@ u_max = 5
 # ratios
 n = [1, 2, 3, 4, 5]
 # fuel costs:
-# C = [1, 1.8, 2.5]
-C = [i * (1.05 - 0.05 * i) for i in n]
+C = [1, 1.8, 2.5, 3.2, 4.0]
+# C = [i * (1.05 - 0.05 * i) for i in n]
 # C = [1, 1.9, 2.7, 3.4, 4.0]
 
 
@@ -85,7 +85,8 @@ def gamma_eq(a_push, x):
     return a_push * x**2 / (1 + x**2 )
 
 
-def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
+def create_gearbox_voronoi(u=None, q_goal=None, traject=None,
+                           use_traject=False, mode=Stages.STAGE_1,
                            psi_shift_2=2.0):
     """Create a gearbox."""
     # State variables:
@@ -98,6 +99,11 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
     X0 = np.array([0, 0, 0, 0, 0]).T
     lbx = np.array([-ca.inf, 0, -ca.inf, -1, 0]).T
     ubx = np.array([ca.inf, v_max, ca.inf, 2, ca.inf]).T
+
+    if use_traject:
+        p_traj = ca.SX.sym('traject')
+    else:
+        p_traj = ca.SX.sym('dummy', 0, 1)
 
     # Controls
     if u is None:
@@ -164,8 +170,14 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
 
     # Traject
     f_q = 0
-    g_path = 0
-    g_terminal = ca.vertcat(q-q_goal, v-v_goal)
+    if use_traject:
+        print("use trajectory as cost")
+        f_q = 0.001 * (p_traj - q)**2
+
+        g_terminal = ca.vertcat(q-p_traj, v-v_goal)
+    else:
+        g_terminal = ca.vertcat(q-q_goal, v-v_goal)
+
     f_terminal = t
 
     # System dynamics
@@ -179,7 +191,7 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
         v, n[2]*u, C[2], 0, 1
     )
 
-    a_push = 4
+    a_push = 2
     push_down_eq = push_equation(-a_push, psi, 1)
     push_up_eq = push_equation(a_push, psi, 0)
 
@@ -191,7 +203,7 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
             s * (2 * f_A - f_push_down),
             s * (f_push_down),
             s * (f_push_up),
-            s * (2 * f_B - f_push_up)
+            s * (2 * f_C - f_push_up)
         ]
     elif mode == Stages.STAGE_2:
         push_down_eq = push_equation(-a_push, psi, 1+psi_shift_2)
@@ -234,6 +246,8 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
     if isinstance(U, ca.SX):
         model = nosnoc.NosnocModel(
             x=X, F=F, g_Stewart=g_ind, x0=X0, u=U, t_var=t,
+            p_time_var=p_traj,
+            p_time_var_val=traject,
             name="gearbox"
         )
     else:
@@ -241,7 +255,7 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
             x=X, F=F, g_Stewart=g_ind, x0=X0, t_var=t,
             name="gearbox"
         )
-    return model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal, Z
+    return model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_terminal, Z
 
 
 def plot(x_list, t_grid, u_list, t_grid_u, Z):
@@ -284,7 +298,7 @@ def plot(x_list, t_grid, u_list, t_grid_u, Z):
 def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
     """Simulate the temperature control system with a fixed input."""
     opts = create_options()
-    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal, Z = create_gearbox_voronoi(u=u, q_goal=q_goal)
+    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_terminal, Z = create_gearbox_voronoi(u=u, q_goal=q_goal)
     Tstep = Tsim / Nsim
     opts.N_finite_elements = 2
     opts.N_stages = 1
@@ -304,18 +318,19 @@ def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
 
 def control():
     """Execute one Control step."""
-    N = 15
-    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal, Z = create_gearbox_voronoi(
-        q_goal=q_goal,
+    N = 3
+    traject = np.array([[q_goal * (i + 1) / N for i in range(N)]]).T
+    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_terminal, Z = create_gearbox_voronoi(
+        q_goal=q_goal, traject=traject, use_traject=True
     )
     opts = create_options()
     opts.N_finite_elements = 6
     opts.n_s = 3
     opts.N_stages = N
-    opts.terminal_time = 30
+    opts.terminal_time = 5
     opts.time_freezing = False
     opts.time_freezing_tolerance = 0.1
-    opts.nlp_max_iter = 400
+    opts.nlp_max_iter = 10000
     opts.sigma_N = 1e-3
 
     ocp = nosnoc.NosnocOcp(

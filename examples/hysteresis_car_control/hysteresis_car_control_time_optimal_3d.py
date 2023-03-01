@@ -8,7 +8,7 @@ are thus given in a 3D space. The hysteresis curves can overlap in this
 """
 
 import nosnoc
-from nosnoc.plot_utils import plot_colored_line_3d
+from nosnoc.plot_utils import plot_colored_line_3d, scatter_3d
 import casadi as ca
 import numpy as np
 from math import ceil, log
@@ -16,8 +16,8 @@ import matplotlib.pyplot as plt
 from enum import Enum
 
 # Hystheresis parameters
-v1 = 10
-v2 = 14
+v1 = 5
+v2 = 10
 
 # Model parameters
 q_goal = 150
@@ -41,10 +41,9 @@ class ZMode(Enum):
     """Z Mode."""
 
     TYPE_1_0 = 1
-    TYPE_1_5 = 2
-    TYPE_2_0 = 3
-    TYPE_PAPER_1 = 4
-    TYPE_PAPER_2 = 5
+    TYPE_2_0 = 2
+    TYPE_PAPER_1 = 3
+    TYPE_PAPER_2 = 4
 
 
 def create_options():
@@ -70,13 +69,11 @@ def create_options():
         log(opts.sigma_N / opts.sigma_0) / log(opts.homotopy_update_slope))) + 1
     opts.comp_tol = 1e-14
 
-    # IPOPT Settings
-    opts.nlp_max_iter = 500
-
     # New setting: time freezing settings
     opts.initial_theta = 0.5
     opts.time_freezing = False
     opts.pss_mode = nosnoc.PssMode.STEWART
+    opts.nlp_max_iter = 300
     return opts
 
 
@@ -87,7 +84,8 @@ def push_equation(a_push, psi, zero_point):
 
 def gamma_eq(a_push, x):
     """Gamma equation."""
-    return a_push * x**2 / (1 + x**2)
+    a_push = 2
+    return a_push * x ** 2 / (1 + x**2) + 1e-3
 
 
 def convert_to_3d(Z_2d, i):
@@ -108,7 +106,7 @@ def convert_to_3d(Z_2d, i):
 
 def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
                            use_traject=False, use_traject_constraint=False,
-                           mode=ZMode.TYPE_PAPER_1):
+                           mode=ZMode.TYPE_1_0):
     """Create a gearbox."""
     if not use_traject and q_goal is None:
         raise Exception("You should provide a traject or a q_goal")
@@ -122,7 +120,7 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
     t = ca.SX.sym('t')  # Time variable
     X = ca.vertcat(q, v, L, w1, w2, t)
     X0 = np.array([0, 0, 0, 0, 0, 0]).T
-    lbx = np.array([-ca.inf, 0, -ca.inf, -1, -1, 0]).T
+    lbx = np.array([-ca.inf, 0, -ca.inf, 0, 0, 0]).T
     ubx = np.array([ca.inf, v_max, ca.inf, ca.inf, ca.inf, ca.inf]).T
 
     if use_traject:
@@ -154,7 +152,7 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             np.array([1-b, 1+a, 0])
         ]
         psi = (v-v1)/(v2-v1)
-    elif mode == ZMode.TYPE_1_5 or mode == ZMode.TYPE_2_0:
+    elif mode == ZMode.TYPE_2_0:
         shift = 0.5
         Z = [
             np.array([b,  -a, 0]),
@@ -238,7 +236,7 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             s * (f_push_up_w1),
             s * (2 * f_B - f_push_up_w1)
         ]
-    elif mode == ZMode.TYPE_1_5 or mode == ZMode.TYPE_2_0:
+    elif mode == ZMode.TYPE_2_0:
         push_down_eq = push_equation(-a_push, psi, 1 + shift)
         push_up_eq = push_equation(a_push, psi, 0 + shift)
         f_push_down_w2 = ca.vertcat(0, 0, 0, 0, push_down_eq, 0)
@@ -293,14 +291,16 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             p_global=u, p_global_val=np.array([0]),
             name="gearbox"
         )
-    return model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal
+    return model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal, Z
 
 
 def plot(x_list, t_grid, u_list, t_grid_u):
     """Plot."""
     q = [x[0] for x in x_list]
     v = [x[1] for x in x_list]
-    aux = [x[-2] + x[-3] for x in x_list]
+    # aux = [x[-2] + x[-3] for x in x_list]
+    w1 = [x[-3] for x in x_list]
+    w2 = [x[-2] for x in x_list]
     t = [x[-1] for x in x_list]
 
     plt.figure()
@@ -321,19 +321,8 @@ def plot(x_list, t_grid, u_list, t_grid_u):
     plt.plot(t, q, label="Position vs actual time")
     plt.xlabel("Actual Time [$s$]")
 
-    plt.figure()
-    plt.plot([-2, 1], [0, 0], 'k')
-    plt.plot([0, 2], [1, 1], 'k')
-    plt.plot([-1, 0, 1, 2], [1.5, 1, 0, -.5], 'k')
-    psi = [(vi - v1) / (v2 - v1) for vi in v]
-    im = plt.scatter(psi, aux, c=t_grid, cmap=plt.hot())
-    im.set_label('Time')
-    plt.colorbar(im)
-    plt.xlabel("$\\psi(x)$")
-    plt.ylabel("$w$")
-
     plot_colored_line_3d(
-        psi, [x[-3] for x in x_list], [x[-2] for x in x_list], t
+        v, w1, w2, t
     )
     plt.show()
 
@@ -341,7 +330,7 @@ def plot(x_list, t_grid, u_list, t_grid_u):
 def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
     """Simulate the temperature control system with a fixed input."""
     opts = create_options()
-    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal = create_gearbox_voronoi(
+    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal, Z = create_gearbox_voronoi(
         use_simulation=True, q_goal=q_goal
     )
     Tstep = Tsim / Nsim
@@ -349,6 +338,7 @@ def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
     opts.N_stages = 1
     opts.terminal_time = Tstep
     opts.sigma_N = 1e-2
+    scatter_3d(Z)
 
     solver = nosnoc.NosnocSolver(opts, model)
 
@@ -358,7 +348,7 @@ def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
         10, 10, 10, 10, 10, 10, -10, -10, -10, -10,
         -10, -10, -10, -10, -10, -10, -10, -10, -10, -10,
     ]]).T)
-    looper.run()
+    looper.run(stop_on_failure=True)
     results = looper.get_results()
     print(f"Ends in zone: {np.argmax(results['theta_sim'][-1][-1])}")
     print(results['theta_sim'][-1][-1])
@@ -367,19 +357,16 @@ def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
 
 def control():
     """Execute one Control step."""
-    N = 5
     # traject = np.array([[q_goal * (i + 1) / N for i in range(N)]]).T
-    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal = create_gearbox_voronoi(
+    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal, Z = create_gearbox_voronoi(
         q_goal=q_goal,
     )
     opts = create_options()
-    opts.N_finite_elements = 6
     opts.n_s = 3
-    opts.N_stages = N
-    opts.terminal_time = 5
-    opts.time_freezing = False
-    opts.time_freezing_tolerance = 0.1
-    opts.nlp_max_iter = 500
+    opts.N_finite_elements = 5
+    opts.N_stages = 5
+    opts.terminal_time = 10
+    opts.sigma_N = 1e-2
 
     ocp = nosnoc.NosnocOcp(
         lbu=lbu, ubu=ubu, f_q=f_q, f_terminal=f_terminal,
@@ -395,4 +382,4 @@ def control():
 
 
 if __name__ == "__main__":
-    simulation()
+    control()
