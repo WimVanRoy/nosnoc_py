@@ -5,6 +5,7 @@ import numpy as np
 from crc_algo.opt.description import Description
 import matplotlib.pyplot as plt
 from crc_algo.timetools import tic, toc
+import pickle
 
 
 class DescriptionExt(Description):
@@ -236,3 +237,10 @@ if __name__ == "__main__":
     plt.plot(Xk)
     plt.show()
     print(opti.get("Yk"))
+    data = {
+        key: opti.get(key)
+        for key in opti.indices.keys()
+    }
+    data["T_final"] = T_final
+    with open("data_3d.pickle", "wb") as f:
+        pickle.dump(data, f)
