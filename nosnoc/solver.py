@@ -286,6 +286,7 @@ class NosnocSolver(NosnocSolverBase):
             nlp_res = ca.norm_inf(sol['g']).full()[0][0]
             cost_val = ca.norm_inf(sol['f']).full()[0][0]
             w_opt = sol['x'].full().flatten()
+            g_sol = sol['g'].full().flatten()
             w0 = w_opt
             w_all.append(w_opt)
 
@@ -348,6 +349,7 @@ class NosnocSolver(NosnocSolverBase):
         results["w_sol"] = w_opt
         results["cost_val"] = cost_val
         results["status"] = status
+        results['g_sol'] = g_sol
 
         # for i in range(len(w_opt)):
         #     print(f"w{i}: {prob.w[i]} = {w_opt[i]}")
