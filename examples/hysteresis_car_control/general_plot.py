@@ -65,6 +65,7 @@ def plot(x_list, t_grid, u_list, t_grid_u):
 with open("data_3d.pickle", "rb") as f:
     results = pickle.load(f)
 
+print(f"{results['v_global']=}")
 plot(
     results["x_traj"], results["t_grid"],
     results["u_list"], results["t_grid_u"]

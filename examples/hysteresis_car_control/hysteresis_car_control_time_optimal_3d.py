@@ -14,7 +14,7 @@ import numpy as np
 from math import ceil, log
 import matplotlib.pyplot as plt
 from enum import Enum
-from nosnoc.plot_utils import plot_voronoi_2d
+from nosnoc.plot_utils import plot_voronoi_2d, plot_colored_line_3d
 
 # Hystheresis parameters
 v1 = 10
@@ -60,7 +60,7 @@ def create_options():
     # initial smoothing parameter
     opts.sigma_0 = 1.0
     # end smoothing parameter
-    opts.sigma_N = 1e-3  # 1e-10
+    opts.sigma_N = 1e-2  # 1e-10
     # decrease rate
     opts.homotopy_update_slope = 0.1
     # number of steps
@@ -72,19 +72,20 @@ def create_options():
     opts.nlp_max_iter = 5000
 
     # New setting: time freezing settings
-    opts.initial_theta = 0.5
-    opts.time_freezing = False
     opts.pss_mode = nosnoc.PssMode.STEWART
+    opts.mpcc_mode = nosnoc.MpccMode.SCHOLTES_INEQ
     return opts
 
 
 def push_equation(a_push, psi, zero_point):
     """Eval push equation."""
-    return a_push * (psi - zero_point) ** 2 / (1 + (psi - zero_point)**2)
+    multip = 1
+    return a_push * multip * (psi - zero_point) ** 2 / (1 + multip * (psi - zero_point)**2) + 1e-6
 
 
 def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
-                           use_traject=False, use_traject_constraint=True):
+                           use_traject=False, use_traject_constraint=True,
+                           shift=0.5, mode=ZMode.PAPER_TYPE_2):
     """Create a gearbox."""
     if not use_traject and q_goal is None:
         raise Exception("You should provide a traject or a q_goal")
@@ -123,7 +124,6 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
     # Tracking gearbox:
     psi = (v-v1)/(v2-v1)
     z = ca.vertcat(psi, w1, w2)
-    mode = ZMode.TYPE_2_0
     a = 1/4
     b = 1/4
     if mode == ZMode.TYPE_1_0:
@@ -134,7 +134,6 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             np.array([1-b, 1+a, 0])
         ]
     elif mode == ZMode.TYPE_2_0:
-        shift = 0.5
         Z = [
             np.array([b,  -a, 0]),
             np.array([b,   a, 0]),
@@ -147,7 +146,7 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             np.array([1-b + shift, 1, 1+a])
         ]
     elif mode == ZMode.PAPER_TYPE_2:
-        shift = 0.5  # = 2 * (1-b - 0.5)
+        # Shift can be 0.5 or 2
         Z = [
             np.array([b,  -a, 0]),
             np.array([b,   a, 0]),
@@ -164,7 +163,6 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             np.array([1 - b + 2 * shift, 2-a, 1]),
             np.array([1 - b + 2 * shift, 2+a, 1])
         ]
-
 
     g_ind = [ca.vertcat(*[
         ca.norm_2(z - zi)**2 for zi in Z
@@ -277,6 +275,8 @@ def plot(x_list, t_grid, u_list, t_grid_u, Z):
     """Plot."""
     q = [x[0] for x in x_list]
     v = [x[1] for x in x_list]
+    w1 = [x[-3] for x in x_list]
+    w2 = [x[-2] for x in x_list]
     aux = [x[-2] + x[-3] for x in x_list]
     t = [x[-1] for x in x_list]
 
@@ -306,14 +306,16 @@ def plot(x_list, t_grid, u_list, t_grid_u, Z):
     plt.colorbar(im, ax=ax)
     plt.xlabel("$\\psi(x)$")
     plt.ylabel("$w$")
+
+    plot_colored_line_3d(psi, w1, w2, t)
     plt.show()
 
 
-def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
+def simulation(Tsim=6, Nsim=30, with_plot=True, shift=0.5, mode=ZMode.PAPER_TYPE_2):
     """Simulate the temperature control system with a fixed input."""
     opts = create_options()
     model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal, Z = create_gearbox_voronoi(
-        use_simulation=True, q_goal=q_goal
+        use_simulation=True, q_goal=q_goal, mode=mode, shift=shift
     )
     Tstep = Tsim / Nsim
     opts.N_finite_elements = 2
@@ -333,31 +335,55 @@ def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
     results = looper.get_results()
     print(f"Ends in zone: {np.argmax(results['theta_sim'][-1][-1])}")
     print(results['theta_sim'][-1][-1])
-    plot(results["X_sim"], results["t_grid"], None, None)
+    plot(results["X_sim"], results["t_grid"], None, None, Z=Z)
 
 
-def control():
+def custom_callback(prob, w_opt, lambda0, x0, iteration):
+    """Make feasible."""
+    if iteration < 1:
+        return w_opt
+
+    ind_x_all = nosnoc.utils.flatten_outer_layers(prob.ind_x, 2)
+    x_sol = w_opt[ind_x_all]
+
+    w1 = x_sol[:, -3]
+    w2 = x_sol[:, -2]
+    w = w1 + w2
+
+    # Bring w to the plane:
+    w = np.clip(w, 0, 6)
+    w1 = w // 2 + np.clip(w % 2, 0, 1)
+    w2 = w // 2 + np.clip(w % 2 - 1, 0, 1)
+
+    x_sol[:, 1] = w1
+    x_sol[:, 2] = w2
+    w_opt[ind_x_all] = x_sol
+
+    return w_opt
+
+
+def control(shift=0.5, mode=ZMode.PAPER_TYPE_2):
     """Execute one Control step."""
     N = 10
     # traject = np.array([[q_goal * (i + 1) / N for i in range(N)]]).T
     model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal, Z = create_gearbox_voronoi(
-        q_goal=q_goal,
+        q_goal=q_goal, shift=shift, mode=mode
     )
     opts = create_options()
     opts.N_finite_elements = 3
     opts.n_s = 2
     opts.N_stages = N
-    opts.terminal_time = 5
-    opts.nlp_max_iter = 500
+    opts.terminal_time = 10
     opts.initialization_strategy = nosnoc.InitializationStrategy.EXTERNAL
 
     ocp = nosnoc.NosnocOcp(
         lbu=lbu, ubu=ubu, f_q=f_q, f_terminal=f_terminal,
-        g_terminal=g_terminal, lbv_global=np.array([0.1]),
-        ubv_global=np.array([10]),
+        g_terminal=g_terminal,
+        lbv_global=np.array([0.1]), ubv_global=np.array([1e3]),
         lbx=lbx, ubx=ubx
     )
     solver = nosnoc.NosnocSolver(opts, model, ocp)
+    # solver.callback = custom_callback
     solver.set('v_global', np.array([1]))
     solver.set('x', np.vstack((
         np.linspace(0, q_goal, N),
@@ -369,6 +395,9 @@ def control():
         np.zeros((1, N)),
     )).T)
     results = solver.solve()
+    solver.model.w0 = results['w_sol']
+    breakpoint()
+    solver.print_problem()
     plot(
         results["x_traj"], results["t_grid"],
         results["u_list"], results["t_grid_u"], Z=Z
@@ -378,4 +407,12 @@ def control():
 
 
 if __name__ == "__main__":
-    control()
+    from sys import argv
+    if len(argv) == 2:
+        print("TYPE 2")
+        control(shift=float(argv[1]), mode=ZMode.TYPE_2_0)
+    elif len(argv) > 2:
+        print("TYPE 3")
+        control(shift=float(argv[1]), mode=ZMode.PAPER_TYPE_2)
+    else:
+        control()
