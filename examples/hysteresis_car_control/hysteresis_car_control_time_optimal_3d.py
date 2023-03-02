@@ -7,6 +7,7 @@ are thus given in a 3D space. The hysteresis curves can overlap in this
 3D space and are solved faster than the 2D version.
 """
 
+import pickle
 import nosnoc
 import casadi as ca
 import numpy as np
@@ -22,13 +23,9 @@ v2 = 14
 # Model parameters
 q_goal = 150
 v_goal = 0
-v_max = 30
+v_max = 25
 u_max = 5
 
-# fuel costs of turbo and nominal
-# TODO
-Pn = 1
-Pt = 2.5
 # fuel costs:
 C = [1, 1.8, 2.5, 3.2]
 # ratios
@@ -72,7 +69,7 @@ def create_options():
     opts.comp_tol = 1e-14
 
     # IPOPT Settings
-    opts.nlp_max_iter = 500
+    opts.nlp_max_iter = 5000
 
     # New setting: time freezing settings
     opts.initial_theta = 0.5
@@ -101,7 +98,7 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
     t = ca.SX.sym('t')  # Time variable
     X = ca.vertcat(q, v, L, w1, w2, t)
     X0 = np.array([0, 0, 0, 0, 0, 0]).T
-    lbx = np.array([-ca.inf, 0, -ca.inf, 0, 0, 0]).T
+    lbx = np.array([0, 0, -ca.inf, 0, 0, 0]).T
     ubx = np.array([ca.inf, v_max, ca.inf, 2, 2, ca.inf]).T
 
     if use_traject:
@@ -126,7 +123,7 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
     # Tracking gearbox:
     psi = (v-v1)/(v2-v1)
     z = ca.vertcat(psi, w1, w2)
-    mode = ZMode.PAPER_TYPE_2
+    mode = ZMode.TYPE_2_0
     a = 1/4
     b = 1/4
     if mode == ZMode.TYPE_1_0:
@@ -137,7 +134,7 @@ def create_gearbox_voronoi(use_simulation=False, q_goal=None, traject=None,
             np.array([1-b, 1+a, 0])
         ]
     elif mode == ZMode.TYPE_2_0:
-        shift = 2.0
+        shift = 0.5
         Z = [
             np.array([b,  -a, 0]),
             np.array([b,   a, 0]),
@@ -301,14 +298,12 @@ def plot(x_list, t_grid, u_list, t_grid_u, Z):
     plt.plot(t, q, label="Position vs actual time")
     plt.xlabel("Actual Time [$s$]")
 
-    fig = plt.figure()
-    ax = fig.gca()
     Z_2d = [[z[0], z[1] + z[2]] for z in Z]
     psi = [(vi - v1) / (v2 - v1) for vi in v]
-    plot_voronoi_2d(Z_2d, ax=ax)
-    im = plt.scatter(psi, aux, c=t_grid, cmap=plt.hot())
+    ax = plot_voronoi_2d(Z_2d, show=False)
+    im = ax.scatter(psi, aux, c=t_grid, cmap=plt.hot())
     im.set_label('Time')
-    plt.colorbar(im)
+    plt.colorbar(im, ax=ax)
     plt.xlabel("$\\psi(x)$")
     plt.ylabel("$w$")
     plt.show()
@@ -343,23 +338,23 @@ def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
 
 def control():
     """Execute one Control step."""
-    N = 5
+    N = 10
     # traject = np.array([[q_goal * (i + 1) / N for i in range(N)]]).T
     model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal, Z = create_gearbox_voronoi(
         q_goal=q_goal,
     )
     opts = create_options()
-    opts.N_finite_elements = 6
-    opts.n_s = 3
+    opts.N_finite_elements = 3
+    opts.n_s = 2
     opts.N_stages = N
-    opts.terminal_time = 10
+    opts.terminal_time = 5
     opts.nlp_max_iter = 500
     opts.initialization_strategy = nosnoc.InitializationStrategy.EXTERNAL
 
     ocp = nosnoc.NosnocOcp(
         lbu=lbu, ubu=ubu, f_q=f_q, f_terminal=f_terminal,
         g_terminal=g_terminal, lbv_global=np.array([0.1]),
-        ubv_global=np.array([20]),
+        ubv_global=np.array([10]),
         lbx=lbx, ubx=ubx
     )
     solver = nosnoc.NosnocSolver(opts, model, ocp)
@@ -378,6 +373,8 @@ def control():
         results["x_traj"], results["t_grid"],
         results["u_list"], results["t_grid_u"], Z=Z
     )
+    with open("data_3d.pickle", "wb") as f:
+        pickle.dump(results, f)
 
 
 if __name__ == "__main__":
