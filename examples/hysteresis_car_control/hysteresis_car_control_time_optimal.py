@@ -51,8 +51,6 @@ def create_options():
     # decrease rate
     opts.homotopy_update_slope = 0.1
     # number of steps
-    opts.N_homotopy = ceil(abs(
-        log(opts.sigma_N / opts.sigma_0) / log(opts.homotopy_update_slope))) + 1
     opts.comp_tol = 1e-14
 
     # IPOPT Settings

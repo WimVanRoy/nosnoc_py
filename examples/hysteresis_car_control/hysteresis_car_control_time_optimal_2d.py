@@ -12,7 +12,6 @@ import nosnoc
 from nosnoc.plot_utils import plot_voronoi_2d
 import casadi as ca
 import numpy as np
-from math import ceil, log
 import matplotlib.pyplot as plt
 from enum import Enum
 
@@ -26,20 +25,18 @@ v_goal = 0
 v_max = 30
 u_max = 5
 
-# ratios
-n = [1, 2, 3, 4, 5]
 # fuel costs:
-C = [1, 1.8, 2.5, 3.2, 4.0]
-# C = [i * (1.05 - 0.05 * i) for i in n]
-# C = [1, 1.9, 2.7, 3.4, 4.0]
+C = [1, 1.8, 2.5, 3.2]
+# ratios
+n = [1, 2, 3, 4]
 
 
 class Stages(Enum):
     """Z Mode."""
 
-    STAGE_1 = 1
-    STAGE_2 = 2
-    TYPE_PAPER_1 = 3
+    TYPE_1_0 = 1
+    TYPE_2_0 = 2
+    TYPE_PAPER = 3
 
 
 def create_options():
@@ -59,10 +56,8 @@ def create_options():
     # end smoothing parameter
     opts.sigma_N = 1e-3  # 1e-10
     # decrease rate
-    opts.homotopy_update_slope = 0.2
+    opts.homotopy_update_slope = 0.1
     # number of steps
-    opts.N_homotopy = ceil(abs(
-        log(opts.sigma_N / opts.sigma_0) / log(opts.homotopy_update_slope))) + 1
     opts.comp_tol = 1e-14
 
     # IPOPT Settings
@@ -80,7 +75,12 @@ def push_equation(a_push, psi, zero_point):
     return a_push * (psi - zero_point) ** 2 / (1 + (psi - zero_point)**2)
 
 
-def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
+def gamma_eq(a_push, x):
+    """Gamma equation."""
+    return a_push * x**2 / (1 + x**2)
+
+
+def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.TYPE_2_0,
                            psi_shift_2=1.5):
     """Create a gearbox."""
     # State variables:
@@ -108,7 +108,7 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
         U = [u, s]
 
     # Tracking gearbox:
-    if mode == Stages.STAGE_1:
+    if mode == Stages.TYPE_1_0:
         Z = [
             np.array([1 / 4, -1 / 4]),
             np.array([1 / 4, 1 / 4]),
@@ -116,7 +116,7 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
             np.array([3 / 4, 5 / 4])
         ]
         psi = (v-v1)/(v2-v1)
-    elif mode == Stages.STAGE_2:
+    elif mode == Stages.TYPE_2_0:
         if psi_shift_2 <= 1.0:
             print("Due to overlapping hysteresis curves, "
                   "this method might give a wrong result!")
@@ -135,22 +135,24 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
             np.array([psi_shift_2 + 3/4, 1 + 5/4]),  # Similar to mode 4
         ]
         psi = (v-v1)/(v2-v1)
-    elif mode == Stages.TYPE_PAPER_1:
-        # Using custom gears:
-        L_levels = [i/5 - 1 for i in [10, 20]]  # , 30, 40]]
-        U_levels = [i/5 - 1 for i in [15, 25]]  # , 35, 45]]
-        psi = v / 5 - 1
-        Z = []
-        for i, (ll, lu) in enumerate(zip(L_levels, U_levels)):
-            l_diff = lu - ll
-            a = l_diff / 2
-            b = 1 / (4 * l_diff)
-            Z.extend([
-                np.array([a - b + ll, i-1/4]),
-                np.array([a - b + ll, i+1/4]),
-                np.array([a + b + ll, i+3/4]),
-                np.array([a + b + ll, i+5/4])
-            ])
+    elif mode == Stages.TYPE_PAPER:
+        Z = [
+            np.array([1/4, -1/4]),  # Original mode 1
+            np.array([1/4, 1/4]),  # Original mode 2
+            np.array([3/4, 3/4]),  # Original mode 3
+            np.array([3/4, 5/4]),  # Original mode 4
+
+            np.array([psi_shift_2 + 1/4, 1 + -1/4]),  # Similar to mode 1
+            np.array([psi_shift_2 + 1/4, 1 + 1/4]),  # Similar to mode 2
+            np.array([psi_shift_2 + 3/4, 1 + 3/4]),  # Similar to mode 3
+            np.array([psi_shift_2 + 3/4, 1 + 5/4]),  # Similar to mode 4
+
+            np.array([2 * psi_shift_2 + 1/4, 2 + -1/4]),  # Similar to mode 1
+            np.array([2 * psi_shift_2 + 1/4, 2 + 1/4]),  # Similar to mode 2
+            np.array([2 * psi_shift_2 + 3/4, 2 + 3/4]),  # Similar to mode 3
+            np.array([2 * psi_shift_2 + 3/4, 2 + 5/4]),  # Similar to mode 4
+        ]
+        psi = (v-v1)/(v2-v1)
 
     z = ca.vertcat(psi, w)
     g_ind = [ca.vertcat(*[
@@ -173,6 +175,9 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
     f_C = ca.vertcat(
         v, n[2]*u, C[2], 0, 1
     )
+    f_D = ca.vertcat(
+        v, n[3]*u, C[3], 0, 1
+    )
 
     a_push = 4
     push_down_eq = push_equation(-a_push, psi, 1)
@@ -181,14 +186,14 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
     f_push_down = ca.vertcat(0, 0, 0, push_down_eq, 0)
     f_push_up = ca.vertcat(0, 0, 0, push_up_eq, 0)
 
-    if mode == Stages.STAGE_1:
+    if mode == Stages.TYPE_1_0:
         f_1 = [
             s * (2 * f_A - f_push_down),
             s * (f_push_down),
             s * (f_push_up),
             s * (2 * f_B - f_push_up)
         ]
-    elif mode == Stages.STAGE_2:
+    elif mode == Stages.TYPE_2_0 or mode == Stages.TYPE_PAPER:
         push_down_eq = push_equation(-a_push, psi, 1+psi_shift_2)
         push_up_eq = push_equation(a_push, psi, psi_shift_2)
         f_push_up_1 = ca.vertcat(0, 0, 0, push_up_eq, 0)
@@ -204,24 +209,16 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
             s * (f_push_up_1),
             s * (2 * f_C - f_push_up_1),
         ]
-    elif mode == Stages.TYPE_PAPER_1:
-        f_1 = []
-        for i, (ll, lu) in enumerate(zip(L_levels, U_levels)):
-            f_A = ca.vertcat(
-                v, n[i]*u, C[i], 0, 1
-            )
-            f_B = ca.vertcat(
-                v, n[i+1]*u, C[i+1], 0, 1
-            )
-            push_down_eq = -gamma_eq(a_push, 2 * (psi - lu)/(lu - ll))
-            push_up_eq = gamma_eq(a_push, 2 * (psi - ll)/(lu - ll))
-            f_push_up_1 = ca.vertcat(0, 0, 0, push_up_eq, 0)
-            f_push_down_1 = ca.vertcat(0, 0, 0, push_down_eq, 0)
+        if mode == Stages.TYPE_PAPER:
+            push_down_eq = push_equation(-a_push, psi, 1+2*psi_shift_2)
+            push_up_eq = push_equation(a_push, psi, 2*2*psi_shift_2)
+            f_push_up_2 = ca.vertcat(0, 0, 0, push_up_eq, 0)
+            f_push_down_2 = ca.vertcat(0, 0, 0, push_down_eq, 0)
             f_1.extend([
-                s * (2 * f_A - f_push_down),
-                s * (f_push_down),
-                s * (f_push_up),
-                s * (2 * f_B - f_push_up),
+                s * (2 * f_C - f_push_down_2),
+                s * (f_push_down_2),
+                s * (f_push_up_2),
+                s * (2 * f_D - f_push_up_2),
             ])
 
     F = [ca.horzcat(*f_1)]
@@ -236,7 +233,7 @@ def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
             x=X, F=F, g_Stewart=g_ind, x0=X0, t_var=t,
             name="gearbox"
         )
-    return model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_terminal, Z
+    return model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal, Z
 
 
 def plot(x_list, t_grid, u_list, t_grid_u, Z):
@@ -264,9 +261,7 @@ def plot(x_list, t_grid, u_list, t_grid_u, Z):
     plt.plot(t, q, label="Position vs actual time")
     plt.xlabel("Actual Time [$s$]")
 
-    fig = plt.figure()
-    ax = fig.add_subplot()
-    plot_voronoi_2d(Z, ax=ax, show=False, annotate=True)
+    ax = plot_voronoi_2d(Z, show=False, annotate=True)
     psi = [(vi - v1) / (v2 - v1) for vi in v]
     im = ax.scatter(psi, aux, c=t_grid, cmap=plt.hot())
     im.set_label('Time')
@@ -279,7 +274,9 @@ def plot(x_list, t_grid, u_list, t_grid_u, Z):
 def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
     """Simulate the temperature control system with a fixed input."""
     opts = create_options()
-    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_terminal, Z = create_gearbox_voronoi(u=u, q_goal=q_goal)
+    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal, Z = create_gearbox_voronoi(
+        u=u, q_goal=q_goal
+    )
     Tstep = Tsim / Nsim
     opts.N_finite_elements = 2
     opts.N_stages = 1
@@ -300,7 +297,7 @@ def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
 def control():
     """Execute one Control step."""
     N = 15
-    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_terminal, Z = create_gearbox_voronoi(
+    model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_path, g_terminal, Z = create_gearbox_voronoi(
         q_goal=q_goal,
     )
     opts = create_options()
