@@ -80,10 +80,8 @@ def push_equation(a_push, psi, zero_point):
     return a_push * (psi - zero_point) ** 2 / (1 + (psi - zero_point)**2)
 
 
-
-def create_gearbox_voronoi(u=None, q_goal=None, traject=None,
-                           use_traject=False, mode=Stages.STAGE_2,
-                           psi_shift_2=3.0):
+def create_gearbox_voronoi(u=None, q_goal=None, mode=Stages.STAGE_2,
+                           psi_shift_2=1.5):
     """Create a gearbox."""
     # State variables:
     q = ca.SX.sym("q")  # position
@@ -95,11 +93,6 @@ def create_gearbox_voronoi(u=None, q_goal=None, traject=None,
     X0 = np.array([0, 0, 0, 0, 0]).T
     lbx = np.array([-ca.inf, -v_max, -ca.inf, -1, 0]).T
     ubx = np.array([ca.inf, v_max, ca.inf, 2, ca.inf]).T
-
-    if use_traject:
-        p_traj = ca.SX.sym('traject')
-    else:
-        p_traj = ca.SX.sym('dummy', 0, 1)
 
     # Controls
     if u is None:
@@ -166,14 +159,8 @@ def create_gearbox_voronoi(u=None, q_goal=None, traject=None,
 
     # Traject
     f_q = 0
-    if use_traject:
-        print("use trajectory as cost")
-        f_q = 0.001 * (p_traj - q)**2
-
-        g_terminal = ca.vertcat(q-p_traj, v-v_goal)
-    else:
-        g_terminal = ca.vertcat(q-q_goal, v-v_goal)
-
+    g_path = 0
+    g_terminal = ca.vertcat(q-q_goal, v-v_goal)
     f_terminal = t
 
     # System dynamics
@@ -313,9 +300,8 @@ def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
 def control():
     """Execute one Control step."""
     N = 15
-    traject = np.array([[q_goal * (i + 1) / N for i in range(N)]]).T
     model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_terminal, Z = create_gearbox_voronoi(
-        q_goal=q_goal, traject=traject, use_traject=True
+        q_goal=q_goal,
     )
     opts = create_options()
     opts.N_finite_elements = 6
