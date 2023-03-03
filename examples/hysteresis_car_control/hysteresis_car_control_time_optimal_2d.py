@@ -17,8 +17,8 @@ import matplotlib.pyplot as plt
 from enum import Enum
 
 # Hystheresis parameters
-v1 = 10
-v2 = 15
+v1 = 5
+v2 = 10
 
 # Model parameters
 q_goal = 150
@@ -55,11 +55,11 @@ def create_options():
     opts.objective_scaling_direct = 0
     # === Penalty/Relaxation paraemetr ===
     # initial smoothing parameter
-    opts.sigma_0 = 1e1
+    opts.sigma_0 = 1e0
     # end smoothing parameter
     opts.sigma_N = 1e-3  # 1e-10
     # decrease rate
-    opts.homotopy_update_slope = 0.1
+    opts.homotopy_update_slope = 0.2
     # number of steps
     opts.N_homotopy = ceil(abs(
         log(opts.sigma_N / opts.sigma_0) / log(opts.homotopy_update_slope))) + 1
@@ -77,12 +77,8 @@ def create_options():
 
 def push_equation(a_push, psi, zero_point):
     """Eval push equation."""
-    return gamma_eq(a_push, psi - zero_point)
+    return a_push * (psi - zero_point) ** 2 / (1 + (psi - zero_point)**2)
 
-
-def gamma_eq(a_push, x):
-    """Gamma equation."""
-    return a_push * x**2 / (1 + x**2)
 
 
 def create_gearbox_voronoi(u=None, q_goal=None, traject=None,
@@ -97,7 +93,7 @@ def create_gearbox_voronoi(u=None, q_goal=None, traject=None,
     t = ca.SX.sym('t')  # Time variable
     X = ca.vertcat(q, v, L, w, t)
     X0 = np.array([0, 0, 0, 0, 0]).T
-    lbx = np.array([-ca.inf, 0, -ca.inf, 0, 0]).T
+    lbx = np.array([-ca.inf, -v_max, -ca.inf, -1, 0]).T
     ubx = np.array([ca.inf, v_max, ca.inf, 2, ca.inf]).T
 
     if use_traject:
@@ -191,7 +187,7 @@ def create_gearbox_voronoi(u=None, q_goal=None, traject=None,
         v, n[2]*u, C[2], 0, 1
     )
 
-    a_push = 2
+    a_push = 4
     push_down_eq = push_equation(-a_push, psi, 1)
     push_up_eq = push_equation(a_push, psi, 0)
 
@@ -203,7 +199,7 @@ def create_gearbox_voronoi(u=None, q_goal=None, traject=None,
             s * (2 * f_A - f_push_down),
             s * (f_push_down),
             s * (f_push_up),
-            s * (2 * f_C - f_push_up)
+            s * (2 * f_B - f_push_up)
         ]
     elif mode == Stages.STAGE_2:
         push_down_eq = push_equation(-a_push, psi, 1+psi_shift_2)
@@ -246,8 +242,6 @@ def create_gearbox_voronoi(u=None, q_goal=None, traject=None,
     if isinstance(U, ca.SX):
         model = nosnoc.NosnocModel(
             x=X, F=F, g_Stewart=g_ind, x0=X0, u=U, t_var=t,
-            p_time_var=p_traj,
-            p_time_var_val=traject,
             name="gearbox"
         )
     else:
@@ -318,7 +312,7 @@ def simulation(u=25, Tsim=6, Nsim=30, with_plot=True):
 
 def control():
     """Execute one Control step."""
-    N = 3
+    N = 15
     traject = np.array([[q_goal * (i + 1) / N for i in range(N)]]).T
     model, lbx, ubx, lbu, ubu, f_q, f_terminal, g_terminal, Z = create_gearbox_voronoi(
         q_goal=q_goal, traject=traject, use_traject=True
@@ -327,11 +321,10 @@ def control():
     opts.N_finite_elements = 6
     opts.n_s = 3
     opts.N_stages = N
-    opts.terminal_time = 5
+    opts.terminal_time = 30
     opts.time_freezing = False
     opts.time_freezing_tolerance = 0.1
     opts.nlp_max_iter = 10000
-    opts.sigma_N = 1e-3
 
     ocp = nosnoc.NosnocOcp(
         lbu=lbu, ubu=ubu, f_q=f_q, f_terminal=f_terminal,
@@ -339,6 +332,10 @@ def control():
         lbx=lbx, ubx=ubx
     )
     solver = nosnoc.NosnocSolver(opts, model, ocp)
+    solver.set('u', np.vstack((
+        np.zeros((1, N)),
+        np.ones((1, N)),
+    )).T)
     results = solver.solve()
     plot(
         results["x_traj"], results["t_grid"],
